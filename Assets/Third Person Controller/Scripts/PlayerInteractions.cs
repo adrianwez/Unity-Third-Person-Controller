@@ -1,7 +1,6 @@
 using UnityEngine;
 namespace AdrianWez
 {
-    [RequireComponent(typeof(Inputs))]
     public class PlayerInteractions : MonoBehaviour
     {
         [Header("Interactions")]
@@ -9,7 +8,6 @@ namespace AdrianWez
         [SerializeField] private float _interactionDistance = 1.5f;             // distance between player and interatable object to trigger the process
         [SerializeField] private TMPro.TMP_Text _interactionText;               // UI to display returned discription from interactable object
         [SerializeField] private UnityEngine.UI.Image _interactionHoldProgress; // UI progress bar to display passage of time while holding the interaction key
-        private Inputs _input { get => GetComponent<Inputs>(); }                // The Inputs component attached to the object
         private void Update()
         {
                 // using transoforms in the array to check for interactable objects
@@ -26,10 +24,10 @@ namespace AdrianWez
                         switch (_interactable._interactionType)
                         {
                             case Interactable.InteractionType.Click:
-                                if (_input._interact.IsPressed()) _interactable.Interact();
+                                if (Input.GetKeyDown(KeyCode.LeftShift)) _interactable.Interact();
                                 break;
                             case Interactable.InteractionType.Hold:
-                                if (_input._interact.IsInProgress())
+                                if (Input.GetKey(KeyCode.LeftShift))
                                 {
                                     _interactable.IncreaseHoldTime();
                                     if (_interactable.GetHoldTime() > 1f)
