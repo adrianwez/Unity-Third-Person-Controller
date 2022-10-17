@@ -1,11 +1,11 @@
-﻿using UnityEngine;
+using UnityEngine;
+using Cinemachine;
 namespace AdrianWez
 {
     namespace Controller
     {
         // Basic Third Person Controller
         [RequireComponent(typeof(CharacterController))]
-        [RequireComponent(typeof(Inputs))]
         [RequireComponent(typeof(Animator))]
         public class ThirdPerson : MonoBehaviour
         {
@@ -15,6 +15,8 @@ namespace AdrianWez
 
             [Tooltip("Sprint speed of the character in m/s")]
             [SerializeField] private float SprintSpeed = 5.335f;
+            [SerializeField] private float _horizontalRotation = 2.5f;
+            [SerializeField] private float _verticalRotation = 2;
 
             [Tooltip("How fast the character turns to face movement direction")]
             [Range(0.0f, 0.3f)]
@@ -42,13 +44,18 @@ namespace AdrianWez
 
             [Header("Camera")]
             [SerializeField] private Camera _mainCamera;
-            [SerializeField] private Cinemachine.CinemachineVirtualCamera _focusCamera;
-            [Tooltip("The follow target set in the Cinemachine Virtual Camera that the camera will follow")]
-            [SerializeField] private GameObject CinemachineCameraTarget;
+            [SerializeField] private CinemachineVirtualCamera _followCamera;
+            private Cinemachine3rdPersonFollow _3rdPersonFollow { get => _followCamera.GetCinemachineComponent<Cinemachine3rdPersonFollow>(); }
+            [SerializeField] private float _maxFollowDistance = 2.4f;
+            [SerializeField] private float _minFollowDistance = 1.5f;
+            [SerializeField] private Vector2 _followVerticalClamp = new(70, -30);
+
+            [SerializeField] private CinemachineVirtualCamera _focusCamera;
 
             [Tooltip("How far in degrees can you move the camera (Up, Down)")]
-            [SerializeField] private Vector2 _baseVerticalClamp = new(70, -30);
             [SerializeField] private Vector2 _focusVerticalClamp = new(25, -20);
+            [Tooltip("The follow target set in the Cinemachine Virtual Camera that the camera will follow")]
+            [SerializeField] private GameObject CinemachineCameraTarget;
 
             [Tooltip("For locking the camera position on all axis")]
             [SerializeField] private bool LockCameraPosition = false;
@@ -87,13 +94,9 @@ namespace AdrianWez
             // hidden refs
             private Animator _animator { get => GetComponent<Animator>(); }
             private CharacterController _controller { get => GetComponent<CharacterController>(); }
-            private Inputs _input { get => GetComponent<Inputs>(); }
-            // fixing input system axis normalization
-            private Vector2 _rawMoveInput { get => _input._move.ReadValue<Vector2>(); }
-            private Vector2 _rawMoveInputBlend;
-            private Vector2 _moveBlendVelocity;
-            [SerializeField] private float _blendSmoothTime = .1f;
-            private Vector3 _move;
+
+            private Vector2 _moveInput { get => new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical")); }
+            private Vector2 _lookInput { get => new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y")); }
             private Vector3 _normalizedMove;
             // states
             public bool Grounded { get; private set; }      // Used to check if player is touching the ground
@@ -121,14 +124,14 @@ namespace AdrianWez
             private void Update()
             {
 
-                _focusCamera.Priority = Focusing ? 11 : 9;
+                _focusCamera.enabled = Focusing ? true : false;
 
                 States();
                 JumpAndGravity();
                 Move();
             }
 
-            private void LateUpdate() => CameraRotation();
+            private void LateUpdate() => CameraProperties();
 
             private void AssignAnimationIDs()
             {
@@ -139,22 +142,29 @@ namespace AdrianWez
                 _animIDFreeFall = Animator.StringToHash("FreeFall");
             }
 
-            private void CameraRotation()
+            private void CameraProperties()
             {
                 // if there is an input and camera position is not fixed
-                if (_input._look.ReadValue<Vector2>().sqrMagnitude >= .001f && !LockCameraPosition)
+                if (_lookInput != Vector2.zero && !LockCameraPosition)
                 {
-                    _cinemachineTargetYaw += _input._look.ReadValue<Vector2>().x;
-                    _cinemachineTargetPitch -= _input._look.ReadValue<Vector2>().y;
+                    _cinemachineTargetYaw += _lookInput.x * _horizontalRotation;
+                    _cinemachineTargetPitch -= _lookInput.y * _verticalRotation;
                 }
 
                 _cinemachineTargetYaw = ClampAngle(_cinemachineTargetYaw, float.MinValue, float.MaxValue);
                 // clamping up and down accordingly to the player's current state
                 if (Focusing) _cinemachineTargetPitch = ClampAngle(_cinemachineTargetPitch, _focusVerticalClamp.y, _focusVerticalClamp.x);
-                else _cinemachineTargetPitch = ClampAngle(_cinemachineTargetPitch, _baseVerticalClamp.y, _baseVerticalClamp.x);
+                else _cinemachineTargetPitch = ClampAngle(_cinemachineTargetPitch, _followVerticalClamp.y, _followVerticalClamp.x);
 
                 // Cinemachine will follow this target
                 CinemachineCameraTarget.transform.rotation = Quaternion.Euler(_cinemachineTargetPitch, _cinemachineTargetYaw, 0.0f);
+
+                // focus camera
+                _focusCamera.gameObject.SetActive(Focusing);
+                
+                // smooth transition to sprint
+                _3rdPersonFollow.CameraDistance = Sprinting? Mathf.Lerp(_3rdPersonFollow.CameraDistance, _maxFollowDistance, Time.deltaTime * _animationBlendRate) : Mathf.Lerp(_3rdPersonFollow.CameraDistance, _minFollowDistance, Time.deltaTime * _animationBlendRate);
+
             }
 
             private void States()
@@ -168,13 +178,13 @@ namespace AdrianWez
 
                 if (Focusing)
                 {
-                    Sprinting = Grounded && _input._sprint.IsPressed() && _rawMoveInputBlend != Vector2.zero;
-                    Focusing = Grounded && !Sprinting && _input._aim.IsInProgress();
+                    Sprinting = Grounded && Input.GetKeyDown(KeyCode.LeftShift) && _moveInput != Vector2.zero;
+                    Focusing = Grounded && !Sprinting && Input.GetKey(KeyCode.Mouse1);
                 }
                 else
                 {
-                    Sprinting = Grounded && _input._sprint.IsInProgress() && _rawMoveInputBlend != Vector2.zero;
-                    Focusing = Grounded && _input._aim.IsPressed() && !Sprinting;
+                    Sprinting = Grounded && Input.GetKey(KeyCode.LeftShift) && _moveInput != Vector2.zero;
+                    Focusing = Grounded && Input.GetKeyDown(KeyCode.Mouse1) && !Sprinting;
                 }
 
                 Moving = new Vector3(_controller.velocity.x, 0, _controller.velocity.z).magnitude != .0f;
@@ -182,23 +192,19 @@ namespace AdrianWez
 
             private void Move()
             {
-                // blending input from the Input System, since it's already 'normalized'
-                _rawMoveInputBlend = Vector2.SmoothDamp(_rawMoveInputBlend, _rawMoveInput, ref _moveBlendVelocity, _blendSmoothTime);
-                _move = new(_rawMoveInputBlend.x, 0, _rawMoveInputBlend.y);
-
                 // set target speed based on move speed, sprint speed and if sprint is pressed
                 _targetSpeed = Sprinting ? SprintSpeed : MoveSpeed;
 
                 // if there is no input, set the target speed to 0
-                if (_move == Vector3.zero) _targetSpeed = 0.0f;
-                _speed = _rawMoveInputBlend.magnitude * _targetSpeed;
+                if (_moveInput == Vector2.zero) _targetSpeed = 0.0f;
+                _speed = _moveInput.magnitude * _targetSpeed;
 
                 // normalise input direction
-                _normalizedMove = new Vector3(_rawMoveInputBlend.x, 0.0f, _rawMoveInputBlend.y).normalized;
+                _normalizedMove = new Vector3(_moveInput.x, 0.0f, _moveInput.y).normalized;
 
                 // note: Vector2's != operator uses approximation so is not floating point error prone, and is cheaper than magnitude
                 // if there is a move input rotate player when the player is moving
-                if (_rawMoveInputBlend != Vector2.zero && !Focusing)
+                if (_moveInput != Vector2.zero && !Focusing)
                 {
                     _targetRotation = Mathf.Atan2(_normalizedMove.x, _normalizedMove.z) * Mathf.Rad2Deg + _mainCamera.transform.eulerAngles.y;
                     _rotation = Mathf.SmoothDampAngle(transform.eulerAngles.y, _targetRotation, ref _rotationVelocity, RotationSmoothTime);
@@ -207,12 +213,12 @@ namespace AdrianWez
                 }
                 if (Focusing)
                 {
-                    _rotation = Mathf.SmoothDampAngle(transform.eulerAngles.y, _mainCamera.transform.eulerAngles.y, ref _rotationVelocity, RotationSmoothTime);
+                    _rotation = Mathf.SmoothDampAngle(transform.eulerAngles.y, _mainCamera.transform.eulerAngles.y, ref _rotationVelocity, RotationSmoothTime/2);
                     // rotate to face input direction relative to camera position
                     transform.rotation = Quaternion.Euler(0.0f, _rotation, 0.0f);
                 }
 
-                _targetDirection = Focusing ? transform.right * _rawMoveInputBlend.x + transform.forward * _rawMoveInputBlend.y : Quaternion.Euler(0.0f, _targetRotation, 0.0f) * Vector3.forward;
+                _targetDirection = Focusing ? transform.right * _moveInput.x + transform.forward * _moveInput.y : Quaternion.Euler(0.0f, _targetRotation, 0.0f) * Vector3.forward;
 
                 // move the player
                 _controller.Move(_targetDirection.normalized * (_speed * Time.deltaTime) + new Vector3(0.0f, _verticalVelocity, 0.0f) * Time.deltaTime);
@@ -221,7 +227,7 @@ namespace AdrianWez
                 if (Focusing)
                 {
                     _baseParameter = Mathf.Clamp01(_baseParameter + Time.deltaTime * _animationBlendRate);
-                    _focusingParameterXZ = Vector3.Lerp(_focusingParameterXZ, new Vector3(_rawMoveInputBlend.x, 0, _rawMoveInputBlend.y) * _speed, Time.deltaTime * _animationBlendRate);
+                    _focusingParameterXZ = Vector3.Lerp(_focusingParameterXZ, new Vector3(_moveInput.x, 0, _moveInput.y) * _speed, Time.deltaTime * _animationBlendRate);
                 }
                 else
                 {
